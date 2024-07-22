@@ -405,8 +405,9 @@ fastify.get('/api/v1/boards/:boardId/roles/:userId', async (request, reply) => {
 
 const start = async () => {
   try {
-    await fastify.listen({ port: 9000 })
-    console.log('Server is running at http://localhost:9000')
+    const PORT = process.env.PORT || '9000'
+    await fastify.listen(parseInt(PORT, 10))
+    console.log(`Server is running at http://localhost:${PORT}`)
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)
