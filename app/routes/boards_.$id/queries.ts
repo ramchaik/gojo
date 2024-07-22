@@ -1,14 +1,17 @@
-import { prisma } from '~/db'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function updateBoardLastOpenedAt(boardId: string) {
-  await prisma.board.update({
-    where: {
-      id: boardId,
-    },
-    data: {
-      lastOpenedAt: new Date(),
-    },
-  })
+  const response = await fetch(
+    `${API_BASE_URL}/boards/${boardId}/last-opened`,
+    {
+      method: 'PATCH',
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error('Failed to update board last opened at')
+  }
 }
 
 export async function updateBoardName({
@@ -18,14 +21,15 @@ export async function updateBoardName({
   boardId: string
   newBoardName: string
 }) {
-  await prisma.board.update({
-    where: {
-      id: boardId,
-    },
-    data: {
-      name: newBoardName,
-    },
+  const response = await fetch(`${API_BASE_URL}/boards/${boardId}/name`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newBoardName }),
   })
+
+  if (!response.ok) {
+    throw new Error('Failed to update board name')
+  }
 }
 
 export async function upsertUserBoardRole({
@@ -35,18 +39,13 @@ export async function upsertUserBoardRole({
   userId: string
   boardId: string
 }) {
-  await prisma.boardRole.upsert({
-    where: {
-      boardId_userId: {
-        boardId,
-        userId,
-      },
-    },
-    update: {},
-    create: {
-      boardId,
-      userId,
-      role: 'Editor',
-    },
+  const response = await fetch(`${API_BASE_URL}/board-roles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, boardId }),
   })
+
+  if (!response.ok) {
+    throw new Error('Failed to upsert user board role')
+  }
 }

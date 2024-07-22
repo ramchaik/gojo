@@ -1,6 +1,5 @@
-import crypto from 'crypto'
-
-import { prisma } from '~/db'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function createUser({
   email,
@@ -11,21 +10,20 @@ export async function createUser({
   name: string
   password: string
 }) {
-  let salt = crypto.randomBytes(16).toString('hex')
-  let hash = crypto
-    .pbkdf2Sync(password, salt, 1000, 64, 'sha256')
-    .toString('hex')
-
-  return prisma.user.create({
-    data: {
-      email,
-      name,
-      Password: {
-        create: {
-          hash,
-          salt,
-        },
-      },
-    },
+  const response = await fetch(`${API_BASE_URL}/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, name }),
   })
+
+  if (!response.ok) {
+    throw new Error('Failed to create user')
+  }
+
+  const result = await response.json()
+  if (!result.success) {
+    throw new Error(result.message || 'Failed to create user')
+  }
+
+  return result.userId
 }

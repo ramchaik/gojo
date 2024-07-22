@@ -1,24 +1,17 @@
-import crypto from 'crypto'
-
-import { prisma } from '~/db/prisma'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function login(email: string, password: string) {
-  let user = await prisma.user.findUnique({
-    where: { email: email },
-    include: { Password: true },
+  const response = await fetch(`${API_BASE_URL}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
   })
 
-  if (!user || !user.Password) {
+  if (!response.ok) {
     return false
   }
 
-  let hash = crypto
-    .pbkdf2Sync(password, user.Password.salt, 1000, 64, 'sha256')
-    .toString('hex')
-
-  if (hash !== user.Password.hash) {
-    return false
-  }
-
-  return user.id
+  const result = await response.json()
+  return result.success ? result.userId : false
 }

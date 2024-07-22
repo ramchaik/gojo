@@ -2,39 +2,46 @@ import { invariant } from '@epic-web/invariant'
 import { redirect, type ActionFunctionArgs } from '@vercel/remix'
 
 import { requireAuthCookie } from '~/auth'
-import { prisma } from '~/db/prisma'
 import { liveblocks } from '~/helpers/liveblocks'
+
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const userId = await requireAuthCookie(request)
-
-  const user = await getUserFromDB(userId)
-
-  if (!user) {
-    // TODO: Toast message
-    return redirect('/', { status: 401 })
-  }
-
-  const session = liveblocks.prepareSession(user.id, {
-    userInfo: {
-      email: user.email,
-      name: user.name,
-    },
-  })
 
   const { room } = await request.json()
 
   invariant(typeof room === 'string', 'Invalid room')
 
-  const role = await getUserRole(user.id, room)
+  // Get Liveblocks session information from the Fastify server
+  const sessionResponse = await fetch(`${API_BASE_URL}/liveblocks-session`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ userId, room }),
+  })
 
-  if (!role) {
-    // TODO: Toast message
-    // User is not allowed to be in the room
-    return redirect('/', { status: 403 })
+  if (!sessionResponse.ok) {
+    if (sessionResponse.status === 404) {
+      // TODO: Toast message
+      return redirect('/', { status: 403 })
+    }
+    throw new Error('Failed to prepare Liveblocks session')
   }
 
-  // currently only support editor role so give full access
+  const sessionData = await sessionResponse.json()
+
+  // Prepare Liveblocks session
+  const session = liveblocks.prepareSession(sessionData.user.id, {
+    userInfo: {
+      email: sessionData.user.email,
+      name: sessionData.user.name,
+    },
+  })
+
+  // Allow access to the room
   session.allow(room, session.FULL_ACCESS)
 
   // Authorize the user and return the result
@@ -46,25 +53,4 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   return new Response(result.body, { status: result.status })
-}
-
-async function getUserFromDB(userId: string) {
-  return await prisma.user.findUnique({
-    where: {
-      id: userId,
-    },
-  })
-}
-
-async function getUserRole(userId: string, boardId: string) {
-  const boardRole = await prisma.boardRole.findUnique({
-    where: {
-      boardId_userId: {
-        boardId,
-        userId,
-      },
-    },
-  })
-
-  return boardRole
 }

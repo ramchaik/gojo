@@ -35,7 +35,7 @@ export default function Boards() {
       <div>
         <h1>Boards</h1>
         <ul>
-          {boards.map((board) => (
+          {boards.map((board: any) => (
             <li key={board.id}>
               <Link
                 to={`/boards/${board.id}`}

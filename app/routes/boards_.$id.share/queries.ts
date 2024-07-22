@@ -1,4 +1,5 @@
-import { prisma } from '~/db'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function addNewBoardMember({
   email,
@@ -7,59 +8,39 @@ export async function addNewBoardMember({
   email: string
   boardId: string
 }) {
-  const user = await prisma.user.findUnique({
-    where: {
-      email,
-    },
+  const response = await fetch(`${API_BASE_URL}/boards/${boardId}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
   })
 
-  if (!user) {
-    return { success: false, message: 'User not found.' }
+  if (!response.ok) {
+    throw new Error('Failed to add new board member')
   }
 
-  await prisma.boardRole.create({
-    data: {
-      role: 'Editor',
-      userId: user.id,
-      boardId,
-    },
-  })
-
-  return { success: true, message: `User "${email}" added to board.` }
+  return response.json()
 }
 
 export async function getAllBoardRoles(boardId: string) {
-  const result = await prisma.boardRole.findMany({
-    where: {
-      boardId,
-    },
-    include: {
-      user: true,
-    },
-    orderBy: {
-      addedAt: 'asc',
-    },
+  const response = await fetch(`${API_BASE_URL}/boards/${boardId}/roles`, {
+    method: 'GET',
   })
 
-  const boardRoles = result.map((boardRole) => {
-    return {
-      email: boardRole.user.email,
-      name: boardRole.user.name,
-      role: boardRole.role,
-      boardRoleId: boardRole.id,
-      addedAt: boardRole.addedAt,
-    }
-  })
+  if (!response.ok) {
+    throw new Error('Failed to get board roles')
+  }
 
-  return boardRoles
+  return response.json()
 }
 
 export async function getBoardById(boardId: string) {
-  const board = await prisma.board.findUnique({
-    where: {
-      id: boardId,
-    },
+  const response = await fetch(`${API_BASE_URL}/boards/${boardId}`, {
+    method: 'GET',
   })
 
-  return board
+  if (!response.ok) {
+    throw new Error('Failed to get board')
+  }
+
+  return response.json()
 }

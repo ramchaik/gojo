@@ -151,7 +151,7 @@ export async function action({ request }: ActionFunctionArgs) {
     })
   }
 
-  let user = await createUser({
+  const userId = await createUser({
     email,
     password,
     name,
@@ -161,6 +161,6 @@ export async function action({ request }: ActionFunctionArgs) {
     await redirectWithSuccess('/boards', {
       message: 'Successfully created a user.',
     }),
-    user.id
+    userId
   )
 }

@@ -1,42 +1,29 @@
-import { prisma } from '~/db'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function createBoard(
   userId: string,
   boardName: string = 'Untitled'
 ) {
-  const board = await prisma.board.create({
-    data: {
-      name: boardName,
-    },
+  const response = await fetch(`${API_BASE_URL}/boards`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, boardName }),
   })
 
-  if (!board) {
+  if (!response.ok) {
     throw new Error('Failed to create board')
   }
 
-  await prisma.boardRole.create({
-    data: {
-      role: 'Owner',
-      boardId: board.id,
-      userId: userId,
-    },
-  })
-
-  return board
+  return response.json()
 }
 
 export async function getBoardsForUser(userId: string) {
-  const result = await prisma.boardRole.findMany({
-    where: {
-      userId,
-    },
-    include: {
-      board: true,
-    },
-  })
+  const response = await fetch(`${API_BASE_URL}/boards?userId=${userId}`)
 
-  return result.map(({ board }) => ({
-    ...board,
-    lastOpenedAt: board.lastOpenedAt?.toLocaleDateString() ?? null,
-  }))
+  if (!response.ok) {
+    throw new Error('Failed to fetch boards')
+  }
+
+  return response.json()
 }

@@ -1,4 +1,5 @@
-import { prisma } from '~/db'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function checkUserAllowedToEditBoard({
   userId,
@@ -7,21 +8,17 @@ export async function checkUserAllowedToEditBoard({
   userId: string
   boardId: string
 }) {
-  const result = await prisma.boardRole.findUnique({
-    where: {
-      boardId_userId: {
-        userId,
-        boardId,
-      },
-    },
-    select: {
-      role: true,
-    },
-  })
+  const response = await fetch(
+    `${API_BASE_URL}/boards/${boardId}/can-edit?userId=${userId}`,
+    {
+      method: 'GET',
+    }
+  )
 
-  if (!result || !result.role) return false
+  if (!response.ok) {
+    throw new Error('Failed to check if user is allowed to edit board')
+  }
 
-  // We currently only support two roles: "owner" and "editor"
-  // Editors also have full access, so no need for further checking
-  return true
+  const result = await response.json()
+  return result.canEdit
 }

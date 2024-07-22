@@ -1,4 +1,5 @@
-import { prisma } from '~/db'
+const API_BASE_URL =
+  process.env.BACKEND_API_BASE_URL || 'http://localhost:9000/api/v1'
 
 export async function checkIsUserOwnerOfBoard({
   userId,
@@ -7,22 +8,29 @@ export async function checkIsUserOwnerOfBoard({
   userId: string
   boardId: string
 }) {
-  const boardRole = await prisma.boardRole.findUnique({
-    where: {
-      boardId_userId: {
-        boardId,
-        userId,
-      },
-    },
-  })
+  const response = await fetch(
+    `${API_BASE_URL}/boards/${boardId}/owner/${userId}`,
+    {
+      method: 'GET',
+    }
+  )
 
-  return boardRole?.role === 'Owner'
+  if (!response.ok) {
+    throw new Error('Failed to check if user is owner of board')
+  }
+
+  const result = await response.json()
+  return result.isOwner
 }
 
 export async function deleteBoard(boardId: string) {
-  return await prisma.board.delete({
-    where: {
-      id: boardId,
-    },
+  const response = await fetch(`${API_BASE_URL}/boards/${boardId}`, {
+    method: 'DELETE',
   })
+
+  if (!response.ok) {
+    throw new Error('Failed to delete board')
+  }
+
+  return response.json()
 }
