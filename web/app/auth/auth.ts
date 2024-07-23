@@ -17,7 +17,7 @@ const authCookie = createCookie('auth', {
   // 30 days
   maxAge: 30 * 24 * 60 * 60,
   httpOnly: true,
-  secure: env.NODE_ENV === 'production',
+  secure: false, //env.NODE_ENV === 'production',
   sameSite: 'lax',
 })
 

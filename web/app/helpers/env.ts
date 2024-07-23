@@ -5,7 +5,7 @@ const envSchema = z.object({
     .enum(['development', 'production', 'test'])
     .optional()
     .default('development'),
-  DATABASE_URL: z.string(),
+  // DATABASE_URL: z.string(),
   COOKIE_SECRET: z.string(),
   LIVEBLOCKS_SECRET_KEY: z.string(),
 })
