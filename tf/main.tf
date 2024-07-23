@@ -241,18 +241,18 @@ resource "aws_launch_template" "web" {
 
   user_data = base64encode(<<-EOF
   #!/bin/bash
-    sudo yum update -y
-    sudo yum install -y docker
-    sudo systemctl start docker
-    sudo systemctl enable docker
-    sudo usermod -a -G docker ec2-user
-    newgrp docker
-    docker pull vsramchaik/gojo-web
-    docker run -d -p 80:3000 --rm --name web \
-      -e COOKIE_SECRET="gojoiscool" \
-      -e LIVEBLOCKS_SECRET_KEY="${var.liveblocks_secret}" \
-      -e BACKEND_API_BASE_URL="http://${aws_lb.app_lb.dns_name}" \
-      vsramchaik/gojo-web
+  sudo yum update -y
+  sudo yum install -y docker
+  sudo systemctl start docker
+  sudo systemctl enable docker
+  sudo usermod -a -G docker ec2-user
+  newgrp docker
+  docker pull vsramchaik/gojo-web
+  docker run -d -p 80:3000 --rm --name web \
+    -e COOKIE_SECRET="gojoiscool" \
+    -e LIVEBLOCKS_SECRET_KEY="${var.liveblocks_secret}" \
+    -e BACKEND_API_BASE_URL="http://${aws_lb.app_lb.dns_name}" \
+    vsramchaik/gojo-web
   EOF
   )
 
@@ -506,17 +506,17 @@ resource "aws_launch_template" "app" {
 
   user_data = base64encode(<<-EOF
   #!/bin/bash
-    sudo yum update -y
-    sudo yum install -y docker
-    sudo systemctl start docker
-    sudo systemctl enable docker
-    sudo usermod -a -G docker ec2-user
-    newgrp docker
-    docker pull vsramchaik/gojo-api
-    docker run -d -p 80:9000 --rm --name api \
-      -e DATABASE_URL="postgres://${var.db_username}:${var.db_password}@${aws_db_instance.gojo_db.endpoint}/${aws_db_instance.gojo_db.db_name}" \
-      -e PORT=9000 \
-      vsramchaik/gojo-api
+  sudo yum update -y
+  sudo yum install -y docker
+  sudo systemctl start docker
+  sudo systemctl enable docker
+  sudo usermod -a -G docker ec2-user
+  newgrp docker
+  docker pull vsramchaik/gojo-api
+  docker run -d -p 80:9000 --rm --name api \
+    -e DATABASE_URL="postgres://${var.db_username}:${var.db_password}@${aws_db_instance.gojo_db.endpoint}/${aws_db_instance.gojo_db.db_name}" \
+    -e PORT=9000 \
+    vsramchaik/gojo-api
   EOF
   )
 
