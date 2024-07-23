@@ -403,6 +403,13 @@ fastify.get("/api/v1/boards/:boardId/roles/:userId", async (request, reply) => {
   return boardRole;
 });
 
+// Health
+fastify.get("/health", async (request, reply) => {
+  reply.status(200).send({
+    message: "Service is health",
+  });
+});
+
 const start = async () => {
   try {
     const PORT = process.env.PORT || "9000";
