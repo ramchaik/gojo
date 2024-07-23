@@ -251,7 +251,7 @@ resource "aws_launch_template" "web" {
   docker run -d -p 80:3000 --rm --name web \
     -e COOKIE_SECRET="gojoiscool" \
     -e LIVEBLOCKS_SECRET_KEY="${var.liveblocks_secret}" \
-    -e BACKEND_API_BASE_URL="http://${aws_lb.app_lb.dns_name}" \
+    -e BACKEND_API_BASE_URL="http://${aws_lb.app_lb.dns_name}/api/v1" \
     vsramchaik/gojo-web
   EOF
   )
@@ -312,6 +312,8 @@ resource "aws_autoscaling_group" "web_asg" {
     value               = "Gojo"
     propagate_at_launch = true
   }
+
+  depends_on = [aws_autoscaling_group.app_asg]
 }
 
 resource "aws_lb" "web_lb" {
@@ -327,6 +329,8 @@ resource "aws_lb" "web_lb" {
     Server  = "WebApp"
     Project = "Gojo"
   }
+
+  depends_on = [aws_lb.app_lb]
 }
 
 resource "aws_lb_target_group" "web_tg" {
@@ -475,10 +479,10 @@ resource "aws_security_group" "app_sg" {
   }
 
   ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.web_sg.id]
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
   egress {
