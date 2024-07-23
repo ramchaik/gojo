@@ -143,3 +143,13 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Terraform ignore rules for a monorepo setup
+**/.terraform/*
+*.tfstate
+*.tfstate.*.backup
+*.tfstate.backup
+*.tfvars
+*.tfplan
+.terraformrc
+terraform.rc
