@@ -565,7 +565,7 @@ resource "aws_autoscaling_group" "app_asg" {
 
   tag {
     key                 = "Tier"
-    value               = "Application"
+    value               = "App"
     propagate_at_launch = true
   }
 
@@ -627,7 +627,7 @@ resource "aws_lb_target_group" "app_tg" {
 
   tags = {
     Name    = "GojoAppTG"
-    Tier    = "Application"
+    Tier    = "App"
     Server  = "AppService"
     Project = "Gojo"
   }
@@ -702,7 +702,7 @@ resource "aws_db_instance" "gojo_db" {
 
   tags = {
     Name    = "GojoDB"
-    Tier    = "Database"
+    Tier    = "Data"
     Service = "GojoRDSDatabase"
     Project = "Gojo"
   }
@@ -784,3 +784,6 @@ resource "aws_sns_topic_subscription" "db_alarm_subscription" {
   protocol  = "email"
   endpoint  = "vaibhav.singh@dal.ca"
 }
+# TODO: 
+# 1. Add rds proxy
+# 2. Add Buggets for the project > send alerts for different threshold
