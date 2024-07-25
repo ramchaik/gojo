@@ -356,7 +356,7 @@ resource "aws_ecs_task_definition" "app_task" {
       environment = [
         {
           name  = "DATABASE_URL"
-          value = "postgres://${var.db_username}:${var.db_password}@${aws_db_instance.gojo_db.endpoint}/${aws_db_instance.gojo_db.db_name}"
+          value = "postgres://${var.db_username}:${var.db_password}@${aws_db_proxy.gojo_db_proxy.endpoint}/${aws_db_instance.gojo_db.db_name}"
         },
         {
           name  = "PORT"
@@ -443,6 +443,23 @@ resource "aws_appautoscaling_target" "web_service_target" {
   service_namespace  = "ecs"
 }
 
+# Web service scale-out policy based on memory utilization
+resource "aws_appautoscaling_policy" "web_service_memory" {
+  name               = "web-service-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.web_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.web_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.web_service_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+    target_value = 80.0 # Target 80% memory utilization
+  }
+}
+
+# Web service scale-out policy based on CPU utilization
 resource "aws_appautoscaling_policy" "web_service_cpu" {
   name               = "web-service-cpu"
   policy_type        = "TargetTrackingScaling"
@@ -454,18 +471,56 @@ resource "aws_appautoscaling_policy" "web_service_cpu" {
     predefined_metric_specification {
       predefined_metric_type = "ECSServiceAverageCPUUtilization"
     }
-    target_value = 70.0
+    target_value = 70.0 # Target 70% CPU utilization
   }
 }
 
+# Web service scale-in policy
+resource "aws_appautoscaling_policy" "web_service_scale_in" {
+  name               = "web-service-scale-in"
+  policy_type        = "StepScaling"
+  resource_id        = aws_appautoscaling_target.web_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.web_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.web_service_target.service_namespace
+
+  step_scaling_policy_configuration {
+    adjustment_type         = "ChangeInCapacity"
+    cooldown                = 300
+    metric_aggregation_type = "Average"
+
+    step_adjustment {
+      metric_interval_upper_bound = 0
+      scaling_adjustment          = -1
+    }
+  }
+}
+
+
 resource "aws_appautoscaling_target" "app_service_target" {
-  max_capacity       = 3
+  max_capacity       = 4
   min_capacity       = 1
   resource_id        = "service/${aws_ecs_cluster.app_cluster.name}/${aws_ecs_service.app_service.name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
 }
 
+# App service scale-out policy based on memory utilization
+resource "aws_appautoscaling_policy" "web_service_memory" {
+  name               = "app-service-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.app_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.app_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.app_service_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+    target_value = 80.0 # Target 80% memory utilization
+  }
+}
+
+# App service scale-out policy based on CPU
 resource "aws_appautoscaling_policy" "app_service_cpu" {
   name               = "app-service-cpu"
   policy_type        = "TargetTrackingScaling"
@@ -481,6 +536,26 @@ resource "aws_appautoscaling_policy" "app_service_cpu" {
   }
 }
 
+# App service scale-in policy
+resource "aws_appautoscaling_policy" "app_service_scale_in" {
+  name               = "app-service-scale-in"
+  policy_type        = "StepScaling"
+  resource_id        = aws_appautoscaling_target.app_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.app_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.app_service_target.service_namespace
+
+  step_scaling_policy_configuration {
+    adjustment_type         = "ChangeInCapacity"
+    cooldown                = 300
+    metric_aggregation_type = "Average"
+
+    step_adjustment {
+      metric_interval_upper_bound = 0
+      scaling_adjustment          = -1
+    }
+  }
+}
+
 # IAM roles and instance profile for ECS
 data "aws_iam_role" "lab_role" {
   name = "LabRole"
@@ -490,6 +565,81 @@ data "aws_iam_role" "lab_role" {
 resource "aws_iam_instance_profile" "ecs_instance_profile" {
   name = "ecs-instance-profile"
   role = data.aws_iam_role.lab_role.name
+}
+
+# RDS Proxy
+resource "aws_db_proxy" "gojo_db_proxy" {
+  name                   = "gojo-db-proxy"
+  debug_logging          = false
+  engine_family          = "POSTGRESQL"
+  idle_client_timeout    = 1800
+  require_tls            = true
+  role_arn               = data.aws_iam_role.lab_role.arn
+  vpc_security_group_ids = [aws_security_group.db_proxy_sg.id]
+  vpc_subnet_ids         = [aws_subnet.private[2].id, aws_subnet.private[3].id]
+
+  auth {
+    auth_scheme = "SECRETS"
+    iam_auth    = "DISABLED"
+    secret_arn  = aws_secretsmanager_secret.db_credentials.arn
+  }
+
+  tags = {
+    Name    = "GojoDBProxy"
+    Tier    = "Data"
+    Service = "GojoRDSProxy"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_db_proxy_default_target_group" "gojo_db_proxy_target_group" {
+  db_proxy_name = aws_db_proxy.gojo_db_proxy.name
+
+  connection_pool_config {
+    max_connections_percent = 100
+  }
+}
+
+resource "aws_db_proxy_target" "gojo_db_proxy_target" {
+  db_instance_identifier = aws_db_instance.gojo_db.identifier
+  db_proxy_name          = aws_db_proxy.gojo_db_proxy.name
+  target_group_name      = aws_db_proxy_default_target_group.gojo_db_proxy_target_group.name
+}
+
+# Security group for RDS Proxy
+resource "aws_security_group" "db_proxy_sg" {
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "GojoDBProxySG"
+  }
+}
+
+# Store DB credentials in Secrets Manager
+resource "aws_secretsmanager_secret" "db_credentials" {
+  name = "gojo-db-credentials"
+}
+
+resource "aws_secretsmanager_secret_version" "db_credentials" {
+  secret_id = aws_secretsmanager_secret.db_credentials.id
+  secret_string = jsonencode({
+    username = var.db_username
+    password = var.db_password
+  })
 }
 
 # RDS Instance
