@@ -505,7 +505,7 @@ resource "aws_appautoscaling_target" "app_service_target" {
 }
 
 # App service scale-out policy based on memory utilization
-resource "aws_appautoscaling_policy" "web_service_memory" {
+resource "aws_appautoscaling_policy" "app_service_memory" {
   name               = "app-service-memory"
   policy_type        = "TargetTrackingScaling"
   resource_id        = aws_appautoscaling_target.app_service_target.resource_id
@@ -648,7 +648,7 @@ resource "aws_db_instance" "gojo_db" {
   allocated_storage      = 20
   engine                 = "postgres"
   engine_version         = "15.5"
-  instance_class         = "db.t3.micro"
+  instance_class         = "db.t4g.micro"
   db_name                = "gojo"
   username               = var.db_username
   password               = var.db_password
@@ -659,12 +659,38 @@ resource "aws_db_instance" "gojo_db" {
   vpc_security_group_ids = [aws_security_group.db_sg.id]
   db_subnet_group_name   = aws_db_subnet_group.gojo_db_subnet_group.name
 
+  # Add backup configuration
+  backup_retention_period = 7
+  backup_window           = "03:00-04:00"
+  copy_tags_to_snapshot   = true
+  deletion_protection     = true
+
+
+  # Enable automated backups to S3
+  backup_target = "region"
+
+  # Enable Performance Insights
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7 # Days
+
+  # Enable enhanced monitoring
+  monitoring_interval = 60
+  monitoring_role_arn = "arn:aws:iam::714922497054:role/LabRole"
+
+  storage_encrypted = true
+  kms_key_id        = aws_kms_key.rds_encryption_key.arn
+
   tags = {
     Name    = "GojoDB"
     Tier    = "Data"
     Service = "GojoRDSDatabase"
     Project = "Gojo"
   }
+}
+
+resource "aws_kms_key" "rds_encryption_key" {
+  description         = "KMS key for RDS encryption"
+  enable_key_rotation = true
 }
 
 resource "aws_security_group" "db_sg" {
@@ -695,5 +721,304 @@ resource "aws_db_subnet_group" "gojo_db_subnet_group" {
 
   tags = {
     Name = "GojoDBSubnetGroup"
+  }
+}
+
+resource "aws_db_instance" "gojo_db_replica" {
+  identifier             = "gojo-db-replica"
+  instance_class         = "db.t4g.micro"
+  replicate_source_db    = aws_db_instance.gojo_db.identifier
+  publicly_accessible    = false
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+
+  tags = {
+    Name    = "GojoDBReplica"
+    Tier    = "Data"
+    Service = "GojoRDSReplica"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_appautoscaling_target" "gojo_db_target" {
+  max_capacity       = 4
+  min_capacity       = 1
+  resource_id        = "db:${aws_db_instance.gojo_db.identifier}"
+  scalable_dimension = "rds:database:ReadReplicaCount"
+  service_namespace  = "rds"
+}
+
+resource "aws_appautoscaling_policy" "gojo_db_policy" {
+  name               = "gojo-db-autoscaling-policy"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.gojo_db_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.gojo_db_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.gojo_db_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "RDSReaderAverageCPUUtilization"
+    }
+    target_value = 75
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm" {
+  alarm_name          = "gojo-db-cpu-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "This metric monitors RDS CPU utilization"
+  alarm_actions       = [aws_sns_topic.db_alarms.arn]
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.gojo_db.identifier
+  }
+}
+
+resource "aws_sns_topic" "db_alarms" {
+  name = "gojo-db-alarms"
+}
+
+# WAF Web ACL
+resource "aws_wafv2_web_acl" "web_acl" {
+  name        = "gojo-web-acl"
+  description = "WAF Web ACL for Gojo web tier"
+  scope       = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  # Rule to block requests from specific countries
+  rule {
+    name     = "BlockCountries"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+    statement {
+      geo_match_statement {
+        country_codes = ["RU", "CN", "KP"] # Example: Block Russia, China, North Korea
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "BlockCountries"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rule to limit rate of requests from a single IP
+  rule {
+    name     = "RateLimitRule"
+    priority = 2
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 2000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "RateLimitRule"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rule to block common SQL injection patterns
+  rule {
+    name     = "SQLInjectionRule"
+    priority = 3
+
+    action {
+      block {}
+    }
+
+    statement {
+      or_statement {
+        statement {
+          sqli_match_statement {
+            field_to_match {
+              all_query_arguments {}
+            }
+            text_transformation {
+              priority = 1
+              type     = "URL_DECODE"
+            }
+          }
+        }
+        statement {
+          sqli_match_statement {
+            field_to_match {
+              body {}
+            }
+            text_transformation {
+              priority = 1
+              type     = "URL_DECODE"
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "SQLInjectionRule"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rule to block common XSS patterns
+  rule {
+    name     = "XSSRule"
+    priority = 4
+
+    action {
+      block {}
+    }
+
+    statement {
+      xss_match_statement {
+        field_to_match {
+          body {}
+        }
+        text_transformation {
+          priority = 1
+          type     = "HTML_ENTITY_DECODE"
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "XSSRule"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "gojo-web-acl"
+    sampled_requests_enabled   = true
+  }
+
+  tags = {
+    Name    = "GojoWebACL"
+    Tier    = "Web"
+    Project = "Gojo"
+  }
+}
+
+# Associate WAF Web ACL with ALB
+resource "aws_wafv2_web_acl_association" "web_acl_alb_association" {
+  resource_arn = aws_lb.web_lb.arn
+  web_acl_arn  = aws_wafv2_web_acl.web_acl.arn
+}
+
+# CloudWatch Logging for WAF
+resource "aws_cloudwatch_log_group" "waf_log_group" {
+  name              = "aws-waf-logs-gojo"
+  retention_in_days = 30
+
+  tags = {
+    Name    = "GojoWAFLogs"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "waf_logging" {
+  log_destination_configs = [aws_cloudwatch_log_group.waf_log_group.arn]
+  resource_arn            = aws_wafv2_web_acl.web_acl.arn
+}
+
+# AWS Backup vault
+resource "aws_backup_vault" "gojo_backup_vault" {
+  name = "gojo-backup-vault"
+
+  tags = {
+    Name    = "GojoBackupVault"
+    Project = "Gojo"
+  }
+}
+
+# AWS Backup plan
+resource "aws_backup_plan" "gojo_backup_plan" {
+  name = "gojo-backup-plan"
+
+  rule {
+    rule_name         = "daily_backup"
+    target_vault_name = aws_backup_vault.gojo_backup_vault.name
+    schedule          = "cron(0 1 * * ? *)" # Daily at 1 AM UTC
+
+    lifecycle {
+      delete_after = 30 # Keep backups for 30 days
+    }
+  }
+
+  rule {
+    rule_name         = "weekly_backup"
+    target_vault_name = aws_backup_vault.gojo_backup_vault.name
+    schedule          = "cron(0 2 ? * SUN *)" # Weekly on Sunday at 2 AM UTC
+
+    lifecycle {
+      delete_after = 90 # Keep weekly backups for 90 days
+    }
+  }
+
+  advanced_backup_setting {
+    backup_options = {
+      WindowsVSS = "enabled"
+    }
+    resource_type = "EC2"
+  }
+
+  tags = {
+    Name    = "GojoBackupPlan"
+    Project = "Gojo"
+  }
+}
+
+# AWS Backup selection
+resource "aws_backup_selection" "gojo_backup_selection" {
+  name         = "gojo-backup-selection"
+  iam_role_arn = data.aws_iam_role.lab_role.arn
+  plan_id      = aws_backup_plan.gojo_backup_plan.id
+
+  selection_tag {
+    type  = "STRINGEQUALS"
+    key   = "Project"
+    value = "Gojo"
+  }
+}
+
+# Enable cross-region backup
+resource "aws_backup_region_settings" "gojo_backup_region_settings" {
+  resource_type_opt_in_preference = {
+    "Aurora"          = true
+    "DynamoDB"        = true
+    "EBS"             = true
+    "EC2"             = true
+    "EFS"             = true
+    "FSx"             = true
+    "RDS"             = true
+    "Storage Gateway" = true
+  }
+
+  resource_type_management_preference = {
+    "DynamoDB" = true
+    "EFS"      = true
+    "RDS"      = true
   }
 }
