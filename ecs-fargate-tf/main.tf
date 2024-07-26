@@ -326,6 +326,15 @@ resource "aws_ecs_task_definition" "web_task" {
           value = "http://${aws_lb.app_lb.dns_name}/api/v1"
         }
       ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/gojo-web-task"
+          awslogs-create-group  = "true"
+          awslogs-region        = "us-east-1"
+          awslogs-stream-prefix = "ecs"
+        }
+      }
     }
   ])
   tags = {
@@ -363,6 +372,15 @@ resource "aws_ecs_task_definition" "app_task" {
           value = "9000"
         }
       ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/gojo-app-task"
+          awslogs-create-group  = "true"
+          awslogs-region        = "us-east-1"
+          awslogs-stream-prefix = "ecs"
+        }
+      }
     }
   ])
   tags = {
@@ -554,6 +572,8 @@ resource "aws_appautoscaling_policy" "app_service_scale_in" {
       scaling_adjustment          = -1
     }
   }
+
+  depends_on = [aws_appautoscaling_target.app_service_target]
 }
 
 # IAM roles and instance profile for ECS
@@ -596,8 +616,11 @@ resource "aws_db_proxy_default_target_group" "gojo_db_proxy_target_group" {
   db_proxy_name = aws_db_proxy.gojo_db_proxy.name
 
   connection_pool_config {
-    max_connections_percent = 100
+    max_connections_percent      = 100
+    max_idle_connections_percent = 50
+    connection_borrow_timeout    = 120
   }
+
 }
 
 resource "aws_db_proxy_target" "gojo_db_proxy_target" {
@@ -644,18 +667,24 @@ resource "aws_secretsmanager_secret_version" "db_credentials" {
 
 # RDS Instance
 resource "aws_db_instance" "gojo_db" {
-  identifier             = "gojo-db"
-  allocated_storage      = 20
-  engine                 = "postgres"
-  engine_version         = "15.5"
-  instance_class         = "db.t4g.micro"
-  db_name                = "gojo"
-  username               = var.db_username
-  password               = var.db_password
-  parameter_group_name   = "default.postgres15"
-  multi_az               = true
-  publicly_accessible    = false
-  skip_final_snapshot    = true
+  identifier            = "gojo-db"
+  allocated_storage     = 20
+  engine                = "postgres"
+  engine_version        = "15.5"
+  instance_class        = "db.t4g.micro"
+  max_allocated_storage = 100 # Allow storage autoscaling up to 100 GB
+
+  db_name              = "gojo"
+  username             = var.db_username
+  password             = var.db_password
+  parameter_group_name = "default.postgres15"
+  multi_az             = true
+  publicly_accessible  = false
+
+  skip_final_snapshot = true
+  # final_snapshot_identifier = "gojo-db-final-snapshot-${formatdate("YYYYMMDDhhmmss", timestamp())}"
+
+
   vpc_security_group_ids = [aws_security_group.db_sg.id]
   db_subnet_group_name   = aws_db_subnet_group.gojo_db_subnet_group.name
 
@@ -663,8 +692,7 @@ resource "aws_db_instance" "gojo_db" {
   backup_retention_period = 7
   backup_window           = "03:00-04:00"
   copy_tags_to_snapshot   = true
-  deletion_protection     = true
-
+  deletion_protection     = false # for testing revert later
 
   # Enable automated backups to S3
   backup_target = "region"
@@ -674,8 +702,8 @@ resource "aws_db_instance" "gojo_db" {
   performance_insights_retention_period = 7 # Days
 
   # Enable enhanced monitoring
-  monitoring_interval = 60
-  monitoring_role_arn = "arn:aws:iam::714922497054:role/LabRole"
+  # monitoring_interval = 60
+  # monitoring_role_arn = "arn:aws:iam::714922497054:role/LabRole"
 
   storage_encrypted = true
   kms_key_id        = aws_kms_key.rds_encryption_key.arn
@@ -685,6 +713,15 @@ resource "aws_db_instance" "gojo_db" {
     Tier    = "Data"
     Service = "GojoRDSDatabase"
     Project = "Gojo"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      password,
+      snapshot_identifier,
+      kms_key_id,
+      storage_encrypted,
+    ]
   }
 }
 
@@ -700,7 +737,7 @@ resource "aws_security_group" "db_sg" {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.app_sg.id]
+    security_groups = [aws_security_group.app_sg.id, aws_security_group.db_proxy_sg.id]
   }
 
   egress {
@@ -731,46 +768,35 @@ resource "aws_db_instance" "gojo_db_replica" {
   publicly_accessible    = false
   vpc_security_group_ids = [aws_security_group.db_sg.id]
 
+  max_allocated_storage = 100 # Allow storage autoscaling up to 100 GB
+
+  skip_final_snapshot = true
+
   tags = {
     Name    = "GojoDBReplica"
     Tier    = "Data"
     Service = "GojoRDSReplica"
     Project = "Gojo"
   }
-}
 
-resource "aws_appautoscaling_target" "gojo_db_target" {
-  max_capacity       = 4
-  min_capacity       = 1
-  resource_id        = "db:${aws_db_instance.gojo_db.identifier}"
-  scalable_dimension = "rds:database:ReadReplicaCount"
-  service_namespace  = "rds"
-}
-
-resource "aws_appautoscaling_policy" "gojo_db_policy" {
-  name               = "gojo-db-autoscaling-policy"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.gojo_db_target.resource_id
-  scalable_dimension = aws_appautoscaling_target.gojo_db_target.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.gojo_db_target.service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "RDSReaderAverageCPUUtilization"
-    }
-    target_value = 75
+  lifecycle {
+    ignore_changes = [
+      snapshot_identifier,
+      storage_encrypted,
+    ]
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm" {
-  alarm_name          = "gojo-db-cpu-alarm"
+# CloudWatch alarm for high CPU utilization on the primary instance
+resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm_high" {
+  alarm_name          = "gojo-db-cpu-alarm-high"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Average"
-  threshold           = 80
+  threshold           = 70
   alarm_description   = "This metric monitors RDS CPU utilization"
   alarm_actions       = [aws_sns_topic.db_alarms.arn]
   dimensions = {
@@ -778,6 +804,24 @@ resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm" {
   }
 }
 
+# CloudWatch alarm for low CPU utilization on the primary instance
+resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm_low" {
+  alarm_name          = "gojo-db-cpu-alarm-low"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 30
+  alarm_description   = "This metric monitors RDS CPU utilization for potential downscaling"
+  alarm_actions       = [aws_sns_topic.db_alarms.arn]
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.gojo_db.identifier
+  }
+}
+
+# Create an SNS topic for DB alarms
 resource "aws_sns_topic" "db_alarms" {
   name = "gojo-db-alarms"
 }
@@ -1006,19 +1050,8 @@ resource "aws_backup_selection" "gojo_backup_selection" {
 # Enable cross-region backup
 resource "aws_backup_region_settings" "gojo_backup_region_settings" {
   resource_type_opt_in_preference = {
-    "Aurora"          = true
-    "DynamoDB"        = true
-    "EBS"             = true
-    "EC2"             = true
-    "EFS"             = true
-    "FSx"             = true
-    "RDS"             = true
-    "Storage Gateway" = true
-  }
-
-  resource_type_management_preference = {
-    "DynamoDB" = true
-    "EFS"      = true
-    "RDS"      = true
+    "EBS" = true
+    "EC2" = true
+    "RDS" = true
   }
 }
