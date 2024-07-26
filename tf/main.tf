@@ -2,6 +2,7 @@ provider "aws" {
   region = "us-east-1"
 }
 
+# VPC and Networking
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
   tags = {
@@ -39,7 +40,6 @@ resource "aws_subnet" "private" {
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
-
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
@@ -51,7 +51,7 @@ resource "aws_route_table" "public" {
 
 resource "aws_route_table_association" "public" {
   count          = 2
-  subnet_id      = element(aws_subnet.public.*.id, count.index)
+  subnet_id      = element(aws_subnet.public[*].id, count.index)
   route_table_id = aws_route_table.public.id
 }
 
@@ -63,12 +63,12 @@ resource "aws_route_table" "private" {
 }
 
 resource "aws_route_table_association" "private" {
-  count          = 4
-  subnet_id      = element(aws_subnet.private.*.id, count.index)
+  count          = 2
+  subnet_id      = element(aws_subnet.private[*].id, count.index)
   route_table_id = aws_route_table.private.id
 }
 
-# Elastic IP for NAT Gateway
+# NAT Gateway
 resource "aws_eip" "nat_eip" {
   domain = "vpc"
   tags = {
@@ -76,268 +76,127 @@ resource "aws_eip" "nat_eip" {
   }
 }
 
-# NAT Gateway
 resource "aws_nat_gateway" "nat_gw" {
   allocation_id = aws_eip.nat_eip.id
   subnet_id     = aws_subnet.public[0].id
-
   tags = {
     Name = "GojoNATGateway"
   }
-
   depends_on = [aws_internet_gateway.igw]
 }
 
-# Update the private route table to use the NAT Gateway
 resource "aws_route" "private_nat_gateway" {
   route_table_id         = aws_route_table.private.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.nat_gw.id
 }
 
-# NACL for public subnets
-resource "aws_network_acl" "public" {
+# Security Groups
+resource "aws_security_group" "web_lb_sg" {
   vpc_id = aws_vpc.main.id
-
-  egress {
-    protocol   = "-1"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 0
-    to_port    = 0
-  }
-
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 80
-    to_port    = 80
-  }
-
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 110
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 443
-    to_port    = 443
-  }
-
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 120
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 22
-    to_port    = 22
-  }
-
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 130
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 1024
-    to_port    = 65535
-  }
-
-  tags = {
-    Name = "GojoPublicNACL"
-  }
-}
-
-# Associate public NACL with public subnets
-resource "aws_network_acl_association" "public" {
-  count          = 2
-  network_acl_id = aws_network_acl.public.id
-  subnet_id      = aws_subnet.public[count.index].id
-}
-
-# NACL for private subnets
-resource "aws_network_acl" "private" {
-  vpc_id = aws_vpc.main.id
-
-  egress {
-    protocol   = "-1"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 0
-    to_port    = 0
-  }
-
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = aws_vpc.main.cidr_block
-    from_port  = 0
-    to_port    = 65535
-  }
-
-  ingress {
-    protocol   = "tcp"
-    rule_no    = 110
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 1024
-    to_port    = 65535
-  }
-
-  tags = {
-    Name = "GojoPrivateNACL"
-  }
-}
-
-# Associate private NACL with private subnets
-resource "aws_network_acl_association" "private" {
-  count          = 4
-  network_acl_id = aws_network_acl.private.id
-  subnet_id      = aws_subnet.private[count.index].id
-}
-
-resource "aws_security_group" "web_sg" {
-  vpc_id = aws_vpc.main.id
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = {
+    Name = "GojoWebLBSG"
+  }
+}
 
+resource "aws_security_group" "web_sg" {
+  vpc_id = aws_vpc.main.id
+  ingress {
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
   tags = {
     Name = "GojoWebSG"
   }
 }
 
-resource "aws_launch_template" "web" {
-  name_prefix   = "web-server-template"
-  image_id      = "ami-0427090fd1714168b" # Amazon Linux 2023 AMI
-  instance_type = "t3.micro"
-
-  network_interfaces {
-    associate_public_ip_address = true
-    security_groups             = [aws_security_group.web_sg.id]
-    subnet_id                   = element(aws_subnet.public.*.id, 0)
+resource "aws_security_group" "app_lb_sg" {
+  vpc_id = aws_vpc.main.id
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-
-  user_data = base64encode(<<-EOF
-  #!/bin/bash
-  sudo yum update -y
-  sudo yum install -y docker
-  sudo systemctl start docker
-  sudo systemctl enable docker
-  sudo usermod -a -G docker ec2-user
-  newgrp docker
-  docker pull vsramchaik/gojo-web
-  docker run -d -p 80:3000 --rm --name web \
-    -e COOKIE_SECRET="gojoiscool" \
-    -e LIVEBLOCKS_SECRET_KEY="${var.liveblocks_secret}" \
-    -e BACKEND_API_BASE_URL="http://${aws_lb.app_lb.dns_name}/api/v1" \
-    vsramchaik/gojo-web
-  EOF
-  )
-
-  tag_specifications {
-    resource_type = "instance"
-    tags = {
-      Name    = "GojoWebServer"
-      Tier    = "Web"
-      Server  = "WebApp"
-      Project = "Gojo"
-    }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tag_specifications {
-    resource_type = "volume"
-    tags = {
-      Name    = "GojoWebServer-Volume"
-      Tier    = "Web"
-      Server  = "WebApp"
-      Project = "Gojo"
-    }
+  tags = {
+    Name = "GojoAppLBSG"
   }
 }
 
-resource "aws_autoscaling_group" "web_asg" {
-  name                = "web-server-asg"
-  desired_capacity    = 2
-  max_size            = 3
-  min_size            = 1
-  vpc_zone_identifier = aws_subnet.public.*.id
+resource "aws_security_group" "app_sg" {
+  vpc_id = aws_vpc.main.id
 
-  launch_template {
-    id      = aws_launch_template.web.id
-    version = "$Latest"
+  ingress {
+    from_port   = 9000
+    to_port     = 9000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tag {
-    key                 = "Name"
-    value               = "GojoWebServer"
-    propagate_at_launch = true
+  ingress {
+    from_port       = 9000
+    to_port         = 9000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web_sg.id]
   }
-
-  tag {
-    key                 = "Tier"
-    value               = "Web"
-    propagate_at_launch = true
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tag {
-    key                 = "Server"
-    value               = "WebApp"
-    propagate_at_launch = true
+  tags = {
+    Name = "GojoAppSG"
   }
-
-  tag {
-    key                 = "Project"
-    value               = "Gojo"
-    propagate_at_launch = true
-  }
-
-  depends_on = [aws_autoscaling_group.app_asg]
 }
 
+# Load Balancers
 resource "aws_lb" "web_lb" {
   name               = "web-lb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.web_sg.id]
-  subnets            = aws_subnet.public.*.id
+  security_groups    = [aws_security_group.web_lb_sg.id]
+  subnets            = aws_subnet.public[*].id
 
   tags = {
     Name    = "GojoWebLB"
     Tier    = "Web"
-    Server  = "WebApp"
     Project = "Gojo"
   }
-
-  depends_on = [aws_lb.app_lb]
 }
 
 resource "aws_lb_target_group" "web_tg" {
-  name     = "web-tg"
-  port     = 80
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.main.id
+  name        = "web-tg"
+  port        = 3000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
 
   health_check {
     path                = "/login"
@@ -351,7 +210,6 @@ resource "aws_lb_target_group" "web_tg" {
   tags = {
     Name    = "GojoWebTG"
     Tier    = "Web"
-    Server  = "WebApp"
     Project = "Gojo"
   }
 }
@@ -367,254 +225,26 @@ resource "aws_lb_listener" "web_listener" {
   }
 }
 
-resource "aws_autoscaling_attachment" "asg_attachment" {
-  autoscaling_group_name = aws_autoscaling_group.web_asg.name
-  lb_target_group_arn    = aws_lb_target_group.web_tg.arn
-}
-
-resource "aws_cloudwatch_metric_alarm" "high_network_in_web" {
-  alarm_name          = "high-network-in-web"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "NetworkIn"
-  namespace           = "AWS/EC2"
-  period              = "60"
-  statistic           = "Average"
-  threshold           = "5000000" # 5 MB in bytes
-  alarm_description   = "This metric monitors EC2 network in utilization"
-  alarm_actions       = [aws_autoscaling_policy.scale_up.arn]
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.web_asg.name
-  }
-}
-
-resource "aws_autoscaling_policy" "scale_up" {
-  name                   = "scale-up"
-  scaling_adjustment     = 1
-  adjustment_type        = "ChangeInCapacity"
-  cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.web_asg.name
-}
-
-resource "aws_cloudwatch_metric_alarm" "low_network_in_web" {
-  alarm_name          = "low-network-in-web"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "NetworkIn"
-  namespace           = "AWS/EC2"
-  period              = "60"
-  statistic           = "Average"
-  threshold           = "1000000" # 1 MB in bytes
-  alarm_description   = "This metric monitors EC2 network in utilization"
-  alarm_actions       = [aws_autoscaling_policy.scale_down.arn]
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.web_asg.name
-  }
-}
-
-resource "aws_autoscaling_policy" "scale_down" {
-  name                   = "scale-down"
-  scaling_adjustment     = -1
-  adjustment_type        = "ChangeInCapacity"
-  cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.web_asg.name
-}
-
-resource "aws_wafv2_web_acl" "web_acl" {
-  name        = "GojoWebACL"
-  description = "WAF for Gojo Web Application"
-  scope       = "REGIONAL"
-  default_action {
-    allow {}
-  }
-
-  rule {
-    name     = "AWS-AWSManagedRulesCommonRuleSet"
-    priority = 1
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "AWSManagedRulesCommonRuleSet"
-      sampled_requests_enabled   = true
-    }
-  }
-
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "GojoWebACL"
-    sampled_requests_enabled   = true
-  }
-
-  tags = {
-    Name    = "GojoWebACL"
-    Tier    = "Web"
-    Server  = "WebApp"
-    Project = "Gojo"
-  }
-}
-
-resource "aws_wafv2_web_acl_association" "web_acl_association" {
-  resource_arn = aws_lb.web_lb.arn
-  web_acl_arn  = aws_wafv2_web_acl.web_acl.arn
-}
-
-resource "aws_security_group" "app_sg" {
-  vpc_id = aws_vpc.main.id
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block]
-  }
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "GojoAppSG"
-  }
-}
-
-resource "aws_launch_template" "app" {
-  name_prefix   = "app-server-template"
-  image_id      = "ami-0427090fd1714168b" # Amazon Linux 2023 AMI
-  instance_type = "t3.micro"
-
-  network_interfaces {
-    associate_public_ip_address = false
-    security_groups             = [aws_security_group.app_sg.id]
-    subnet_id                   = element(aws_subnet.private.*.id, 0)
-  }
-
-  user_data = base64encode(<<-EOF
-  #!/bin/bash
-  sudo yum update -y
-  sudo yum install -y docker
-  sudo systemctl start docker
-  sudo systemctl enable docker
-  sudo usermod -a -G docker ec2-user
-  newgrp docker
-  docker pull vsramchaik/gojo-api
-  docker run -d -p 80:9000 --rm --name api \
-    -e DATABASE_URL="postgres://${var.db_username}:${var.db_password}@${aws_db_instance.gojo_db.endpoint}/${aws_db_instance.gojo_db.db_name}" \
-    -e PORT=9000 \
-    vsramchaik/gojo-api
-  EOF
-  )
-
-  tag_specifications {
-    resource_type = "instance"
-    tags = {
-      Name    = "GojoAppServer"
-      Tier    = "Apppplication"
-      Server  = "AppService"
-      Project = "Gojo"
-    }
-  }
-
-  tag_specifications {
-    resource_type = "volume"
-    tags = {
-      Name    = "GojoAppServer-Volume"
-      Tier    = "App"
-      Server  = "AppService"
-      Project = "Gojo"
-    }
-  }
-}
-
-resource "aws_autoscaling_group" "app_asg" {
-  name                = "app-server-asg"
-  desired_capacity    = 1
-  max_size            = 3
-  min_size            = 1
-  vpc_zone_identifier = [aws_subnet.private[0].id, aws_subnet.private[1].id]
-
-  launch_template {
-    id      = aws_launch_template.app.id
-    version = "$Latest"
-  }
-
-  tag {
-    key                 = "Name"
-    value               = "GojoAppServer"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Tier"
-    value               = "App"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Server"
-    value               = "AppService"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Project"
-    value               = "Gojo"
-    propagate_at_launch = true
-  }
-}
-
-resource "aws_autoscaling_attachment" "app_asg_attachment" {
-  autoscaling_group_name = aws_autoscaling_group.app_asg.name
-  lb_target_group_arn    = aws_lb_target_group.app_tg.arn
-}
-
 resource "aws_lb" "app_lb" {
   name               = "app-lb"
   internal           = true
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.app_sg.id]
-  subnets            = [aws_subnet.private[0].id, aws_subnet.private[1].id]
+  security_groups    = [aws_security_group.app_lb_sg.id]
+  subnets            = [aws_subnet.private[1].id, aws_subnet.private[2].id]
 
   tags = {
-    Name = "GojoAppLB"
-  }
-}
-
-resource "aws_lb_listener" "app_listener" {
-  load_balancer_arn = aws_lb.app_lb.arn
-  port              = "80"
-  protocol          = "HTTP"
-
-  default_action {
-    target_group_arn = aws_lb_target_group.app_tg.arn
-    type             = "forward"
+    Name    = "GojoAppLB"
+    Tier    = "App"
+    Project = "Gojo"
   }
 }
 
 resource "aws_lb_target_group" "app_tg" {
-  name     = "app-tg"
-  port     = 80
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.main.id
+  name        = "app-tg"
+  port        = 9000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
 
   health_check {
     path                = "/health"
@@ -628,87 +258,379 @@ resource "aws_lb_target_group" "app_tg" {
   tags = {
     Name    = "GojoAppTG"
     Tier    = "App"
-    Server  = "AppService"
     Project = "Gojo"
   }
 }
 
+resource "aws_lb_listener" "app_listener" {
+  load_balancer_arn = aws_lb.app_lb.arn
+  port              = 80
+  protocol          = "HTTP"
 
-resource "aws_cloudwatch_metric_alarm" "high_network_in_app" {
-  alarm_name          = "high-network-in-app"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "NetworkIn"
-  namespace           = "AWS/EC2"
-  period              = "60"
-  statistic           = "Average"
-  threshold           = "5000000" # 5 MB in bytes
-  alarm_description   = "This metric monitors EC2 network in utilization"
-  alarm_actions       = [aws_autoscaling_policy.app_scale_up.arn]
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.app_asg.name
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app_tg.arn
   }
 }
 
-resource "aws_autoscaling_policy" "app_scale_up" {
-  name                   = "scale-up"
-  scaling_adjustment     = 1
-  adjustment_type        = "ChangeInCapacity"
-  cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.app_asg.name
-}
 
-resource "aws_cloudwatch_metric_alarm" "low_network_in_app" {
-  alarm_name          = "low-network-in-app"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "NetworkIn"
-  namespace           = "AWS/EC2"
-  period              = "60"
-  statistic           = "Average"
-  threshold           = "1000000" # 1 MB in bytes
-  alarm_description   = "This metric monitors EC2 network in utilization"
-  alarm_actions       = [aws_autoscaling_policy.app_scale_down.arn]
-
-  dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.app_asg.name
+# ECS Clusters
+resource "aws_ecs_cluster" "web_cluster" {
+  name = "gojo-web-cluster"
+  tags = {
+    Name    = "GojoWebCluster"
+    Tier    = "Web"
+    Project = "Gojo"
   }
 }
 
-resource "aws_autoscaling_policy" "app_scale_down" {
-  name                   = "scale-down"
-  scaling_adjustment     = -1
-  adjustment_type        = "ChangeInCapacity"
-  cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.app_asg.name
+resource "aws_ecs_cluster" "app_cluster" {
+  name = "gojo-app-cluster"
+  tags = {
+    Name    = "GojoAppCluster"
+    Tier    = "App"
+    Project = "Gojo"
+  }
 }
 
-resource "aws_db_instance" "gojo_db" {
-  identifier             = "gojo-db"
-  allocated_storage      = 20
-  engine                 = "postgres"
-  engine_version         = "15.5"
-  instance_class         = "db.t3.micro"
-  db_name                = "gojo"
-  username               = var.db_username
-  password               = var.db_password
-  parameter_group_name   = "default.postgres15"
-  multi_az               = true
-  publicly_accessible    = false
-  skip_final_snapshot    = true
-  vpc_security_group_ids = [aws_security_group.db_sg.id]
-  db_subnet_group_name   = aws_db_subnet_group.gojo_db_subnet_group.name
+# ECS Task Definitions
+resource "aws_ecs_task_definition" "web_task" {
+  family                   = "gojo-web-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = "arn:aws:iam::714922497054:role/LabRole"
+  container_definitions = jsonencode([
+    {
+      name  = "web"
+      image = "vsramchaik/gojo-web:latest"
+      portMappings = [
+        {
+          containerPort = 3000
+          hostPort      = 3000
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "COOKIE_SECRET"
+          value = "gojoiscool"
+        },
+        {
+          name  = "LIVEBLOCKS_SECRET_KEY"
+          value = var.liveblocks_secret
+        },
+        {
+          name  = "BACKEND_API_BASE_URL"
+          value = "http://${aws_lb.app_lb.dns_name}/api/v1"
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/gojo-web-task"
+          awslogs-create-group  = "true"
+          awslogs-region        = "us-east-1"
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+  tags = {
+    Name    = "GojoWebTask"
+    Tier    = "Web"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_ecs_task_definition" "app_task" {
+  family                   = "gojo-app-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = "arn:aws:iam::714922497054:role/LabRole"
+  container_definitions = jsonencode([
+    {
+      name  = "api"
+      image = "vsramchaik/gojo-api:latest"
+      portMappings = [
+        {
+          containerPort = 9000
+          hostPort      = 9000
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "DATABASE_URL"
+          value = "postgres://${var.db_username}:${var.db_password}@${aws_db_proxy.gojo_db_proxy.endpoint}/${aws_db_instance.gojo_db.db_name}"
+        },
+        {
+          name  = "PORT"
+          value = "9000"
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/gojo-app-task"
+          awslogs-create-group  = "true"
+          awslogs-region        = "us-east-1"
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+  tags = {
+    Name    = "GojoAppTask"
+    Tier    = "App"
+    Project = "Gojo"
+  }
+}
+
+# ECS Services
+resource "aws_ecs_service" "web_service" {
+  name            = "gojo-web-service"
+  cluster         = aws_ecs_cluster.web_cluster.id
+  task_definition = aws_ecs_task_definition.web_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.web_sg.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.web_tg.arn
+    container_name   = "web"
+    container_port   = 3000
+  }
+
+  depends_on = [
+    aws_lb_listener.web_listener,
+    aws_ecs_task_definition.web_task
+  ]
 
   tags = {
-    Name    = "GojoDB"
-    Tier    = "Data"
-    Service = "GojoRDSDatabase"
+    Name    = "GojoWebService"
+    Tier    = "Web"
     Project = "Gojo"
   }
 }
 
-resource "aws_security_group" "db_sg" {
+resource "aws_ecs_service" "app_service" {
+  name            = "gojo-app-service"
+  cluster         = aws_ecs_cluster.app_cluster.id
+  task_definition = aws_ecs_task_definition.app_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets         = aws_subnet.private[*].id
+    security_groups = [aws_security_group.app_sg.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app_tg.arn
+    container_name   = "api"
+    container_port   = 9000
+  }
+
+  depends_on = [
+    aws_lb_listener.app_listener,
+    aws_ecs_task_definition.app_task
+  ]
+
+  tags = {
+    Name    = "GojoAppService"
+    Tier    = "App"
+    Project = "Gojo"
+  }
+}
+
+# Auto Scaling for ECS Services
+resource "aws_appautoscaling_target" "web_service_target" {
+  max_capacity       = 4
+  min_capacity       = 1
+  resource_id        = "service/${aws_ecs_cluster.web_cluster.name}/${aws_ecs_service.web_service.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+# Web service scale-out policy based on memory utilization
+resource "aws_appautoscaling_policy" "web_service_memory" {
+  name               = "web-service-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.web_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.web_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.web_service_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+    target_value = 80.0 # Target 80% memory utilization
+  }
+}
+
+# Web service scale-out policy based on CPU utilization
+resource "aws_appautoscaling_policy" "web_service_cpu" {
+  name               = "web-service-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.web_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.web_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.web_service_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value = 70.0 # Target 70% CPU utilization
+  }
+}
+
+# Web service scale-in policy
+resource "aws_appautoscaling_policy" "web_service_scale_in" {
+  name               = "web-service-scale-in"
+  policy_type        = "StepScaling"
+  resource_id        = aws_appautoscaling_target.web_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.web_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.web_service_target.service_namespace
+
+  step_scaling_policy_configuration {
+    adjustment_type         = "ChangeInCapacity"
+    cooldown                = 300
+    metric_aggregation_type = "Average"
+
+    step_adjustment {
+      metric_interval_upper_bound = 0
+      scaling_adjustment          = -1
+    }
+  }
+}
+
+
+resource "aws_appautoscaling_target" "app_service_target" {
+  max_capacity       = 4
+  min_capacity       = 1
+  resource_id        = "service/${aws_ecs_cluster.app_cluster.name}/${aws_ecs_service.app_service.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+# App service scale-out policy based on memory utilization
+resource "aws_appautoscaling_policy" "app_service_memory" {
+  name               = "app-service-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.app_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.app_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.app_service_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+    target_value = 80.0 # Target 80% memory utilization
+  }
+}
+
+# App service scale-out policy based on CPU
+resource "aws_appautoscaling_policy" "app_service_cpu" {
+  name               = "app-service-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.app_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.app_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.app_service_target.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value = 70.0
+  }
+}
+
+# App service scale-in policy
+resource "aws_appautoscaling_policy" "app_service_scale_in" {
+  name               = "app-service-scale-in"
+  policy_type        = "StepScaling"
+  resource_id        = aws_appautoscaling_target.app_service_target.resource_id
+  scalable_dimension = aws_appautoscaling_target.app_service_target.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.app_service_target.service_namespace
+
+  step_scaling_policy_configuration {
+    adjustment_type         = "ChangeInCapacity"
+    cooldown                = 300
+    metric_aggregation_type = "Average"
+
+    step_adjustment {
+      metric_interval_upper_bound = 0
+      scaling_adjustment          = -1
+    }
+  }
+
+  depends_on = [aws_appautoscaling_target.app_service_target]
+}
+
+# IAM roles and instance profile for ECS
+data "aws_iam_role" "lab_role" {
+  name = "LabRole"
+}
+
+# Create an instance profile using the existing role
+resource "aws_iam_instance_profile" "ecs_instance_profile" {
+  name = "ecs-instance-profile"
+  role = data.aws_iam_role.lab_role.name
+}
+
+# RDS Proxy
+resource "aws_db_proxy" "gojo_db_proxy" {
+  name                   = "gojo-db-proxy"
+  debug_logging          = false
+  engine_family          = "POSTGRESQL"
+  idle_client_timeout    = 1800
+  require_tls            = true
+  role_arn               = data.aws_iam_role.lab_role.arn
+  vpc_security_group_ids = [aws_security_group.db_proxy_sg.id]
+  vpc_subnet_ids         = [aws_subnet.private[2].id, aws_subnet.private[3].id]
+
+  auth {
+    auth_scheme = "SECRETS"
+    iam_auth    = "DISABLED"
+    secret_arn  = aws_secretsmanager_secret.db_credentials.arn
+  }
+
+  tags = {
+    Name    = "GojoDBProxy"
+    Tier    = "Data"
+    Service = "GojoRDSProxy"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_db_proxy_default_target_group" "gojo_db_proxy_target_group" {
+  db_proxy_name = aws_db_proxy.gojo_db_proxy.name
+
+  connection_pool_config {
+    max_connections_percent      = 100
+    max_idle_connections_percent = 50
+    connection_borrow_timeout    = 120
+  }
+
+}
+
+resource "aws_db_proxy_target" "gojo_db_proxy_target" {
+  db_instance_identifier = aws_db_instance.gojo_db.identifier
+  db_proxy_name          = aws_db_proxy.gojo_db_proxy.name
+  target_group_name      = aws_db_proxy_default_target_group.gojo_db_proxy_target_group.name
+}
+
+# Security group for RDS Proxy
+resource "aws_security_group" "db_proxy_sg" {
   vpc_id = aws_vpc.main.id
 
   ingress {
@@ -718,6 +640,105 @@ resource "aws_security_group" "db_sg" {
     security_groups = [aws_security_group.app_sg.id]
   }
 
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "GojoDBProxySG"
+  }
+}
+
+# Store DB credentials in Secrets Manager
+resource "aws_secretsmanager_secret" "db_credentials" {
+  name = "gojo-db-credentials"
+}
+
+resource "aws_secretsmanager_secret_version" "db_credentials" {
+  secret_id = aws_secretsmanager_secret.db_credentials.id
+  secret_string = jsonencode({
+    username = var.db_username
+    password = var.db_password
+  })
+}
+
+# RDS Instance
+resource "aws_db_instance" "gojo_db" {
+  identifier            = "gojo-db"
+  allocated_storage     = 20
+  engine                = "postgres"
+  engine_version        = "15.5"
+  instance_class        = "db.t4g.micro"
+  max_allocated_storage = 100 # Allow storage autoscaling up to 100 GB
+
+  db_name              = "gojo"
+  username             = var.db_username
+  password             = var.db_password
+  parameter_group_name = "default.postgres15"
+  multi_az             = true
+  publicly_accessible  = false
+
+  skip_final_snapshot = true
+  # final_snapshot_identifier = "gojo-db-final-snapshot-${formatdate("YYYYMMDDhhmmss", timestamp())}"
+
+
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.gojo_db_subnet_group.name
+
+  # Add backup configuration
+  backup_retention_period = 7
+  backup_window           = "03:00-04:00"
+  copy_tags_to_snapshot   = true
+  deletion_protection     = false # for testing revert later
+
+  # Enable automated backups to S3
+  backup_target = "region"
+
+  # Enable Performance Insights
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7 # Days
+
+  # Enable enhanced monitoring
+  # monitoring_interval = 60
+  # monitoring_role_arn = "arn:aws:iam::714922497054:role/LabRole"
+
+  storage_encrypted = true
+  kms_key_id        = aws_kms_key.rds_encryption_key.arn
+
+  tags = {
+    Name    = "GojoDB"
+    Tier    = "Data"
+    Service = "GojoRDSDatabase"
+    Project = "Gojo"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      password,
+      snapshot_identifier,
+      kms_key_id,
+      storage_encrypted,
+    ]
+  }
+}
+
+resource "aws_kms_key" "rds_encryption_key" {
+  description         = "KMS key for RDS encryption"
+  enable_key_rotation = true
+}
+
+resource "aws_security_group" "db_sg" {
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app_sg.id, aws_security_group.db_proxy_sg.id]
+  }
 
   egress {
     from_port   = 0
@@ -740,50 +761,297 @@ resource "aws_db_subnet_group" "gojo_db_subnet_group" {
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "high_cpu_db" {
-  alarm_name          = "high-cpu-db"
+resource "aws_db_instance" "gojo_db_replica" {
+  identifier             = "gojo-db-replica"
+  instance_class         = "db.t4g.micro"
+  replicate_source_db    = aws_db_instance.gojo_db.identifier
+  publicly_accessible    = false
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+
+  max_allocated_storage = 100 # Allow storage autoscaling up to 100 GB
+
+  skip_final_snapshot = true
+
+  tags = {
+    Name    = "GojoDBReplica"
+    Tier    = "Data"
+    Service = "GojoRDSReplica"
+    Project = "Gojo"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      snapshot_identifier,
+      storage_encrypted,
+    ]
+  }
+}
+
+# CloudWatch alarm for high CPU utilization on the primary instance
+resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm_high" {
+  alarm_name          = "gojo-db-cpu-alarm-high"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "2"
+  evaluation_periods  = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/RDS"
-  period              = "60"
+  period              = 300
   statistic           = "Average"
-  threshold           = "80" # 80% CPU utilization
+  threshold           = 70
   alarm_description   = "This metric monitors RDS CPU utilization"
-  alarm_actions       = [aws_sns_topic.db_alarm.arn]
-
+  alarm_actions       = [aws_sns_topic.db_alarms.arn]
   dimensions = {
     DBInstanceIdentifier = aws_db_instance.gojo_db.identifier
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "low_cpu_db" {
-  alarm_name          = "low-cpu-db"
+# CloudWatch alarm for low CPU utilization on the primary instance
+resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm_low" {
+  alarm_name          = "gojo-db-cpu-alarm-low"
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "2"
+  evaluation_periods  = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/RDS"
-  period              = "60"
+  period              = 300
   statistic           = "Average"
-  threshold           = "10" # 10% CPU utilization
-  alarm_description   = "This metric monitors RDS CPU utilization"
-  alarm_actions       = [aws_sns_topic.db_alarm.arn]
-
+  threshold           = 30
+  alarm_description   = "This metric monitors RDS CPU utilization for potential downscaling"
+  alarm_actions       = [aws_sns_topic.db_alarms.arn]
   dimensions = {
     DBInstanceIdentifier = aws_db_instance.gojo_db.identifier
   }
 }
 
-resource "aws_sns_topic" "db_alarm" {
-  name         = "db-alarm-topic"
-  display_name = "RDS Alarms"
+# Create an SNS topic for DB alarms
+resource "aws_sns_topic" "db_alarms" {
+  name = "gojo-db-alarms"
 }
 
-resource "aws_sns_topic_subscription" "db_alarm_subscription" {
-  topic_arn = aws_sns_topic.db_alarm.arn
-  protocol  = "email"
-  endpoint  = "vaibhav.singh@dal.ca"
+# WAF Web ACL
+resource "aws_wafv2_web_acl" "web_acl" {
+  name        = "gojo-web-acl"
+  description = "WAF Web ACL for Gojo web tier"
+  scope       = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  # Rule to block requests from specific countries
+  rule {
+    name     = "BlockCountries"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+    statement {
+      geo_match_statement {
+        country_codes = ["RU", "CN", "KP"] # Example: Block Russia, China, North Korea
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "BlockCountries"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rule to limit rate of requests from a single IP
+  rule {
+    name     = "RateLimitRule"
+    priority = 2
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 2000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "RateLimitRule"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rule to block common SQL injection patterns
+  rule {
+    name     = "SQLInjectionRule"
+    priority = 3
+
+    action {
+      block {}
+    }
+
+    statement {
+      or_statement {
+        statement {
+          sqli_match_statement {
+            field_to_match {
+              all_query_arguments {}
+            }
+            text_transformation {
+              priority = 1
+              type     = "URL_DECODE"
+            }
+          }
+        }
+        statement {
+          sqli_match_statement {
+            field_to_match {
+              body {}
+            }
+            text_transformation {
+              priority = 1
+              type     = "URL_DECODE"
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "SQLInjectionRule"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rule to block common XSS patterns
+  rule {
+    name     = "XSSRule"
+    priority = 4
+
+    action {
+      block {}
+    }
+
+    statement {
+      xss_match_statement {
+        field_to_match {
+          body {}
+        }
+        text_transformation {
+          priority = 1
+          type     = "HTML_ENTITY_DECODE"
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "XSSRule"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "gojo-web-acl"
+    sampled_requests_enabled   = true
+  }
+
+  tags = {
+    Name    = "GojoWebACL"
+    Tier    = "Web"
+    Project = "Gojo"
+  }
 }
-# TODO: 
-# 1. Add rds proxy
-# 2. Add Buggets for the project > send alerts for different threshold
+
+# Associate WAF Web ACL with ALB
+resource "aws_wafv2_web_acl_association" "web_acl_alb_association" {
+  resource_arn = aws_lb.web_lb.arn
+  web_acl_arn  = aws_wafv2_web_acl.web_acl.arn
+}
+
+# CloudWatch Logging for WAF
+resource "aws_cloudwatch_log_group" "waf_log_group" {
+  name              = "aws-waf-logs-gojo"
+  retention_in_days = 30
+
+  tags = {
+    Name    = "GojoWAFLogs"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "waf_logging" {
+  log_destination_configs = [aws_cloudwatch_log_group.waf_log_group.arn]
+  resource_arn            = aws_wafv2_web_acl.web_acl.arn
+}
+
+# AWS Backup vault
+resource "aws_backup_vault" "gojo_backup_vault" {
+  name = "gojo-backup-vault"
+
+  tags = {
+    Name    = "GojoBackupVault"
+    Project = "Gojo"
+  }
+}
+
+# AWS Backup plan
+resource "aws_backup_plan" "gojo_backup_plan" {
+  name = "gojo-backup-plan"
+
+  rule {
+    rule_name         = "daily_backup"
+    target_vault_name = aws_backup_vault.gojo_backup_vault.name
+    schedule          = "cron(0 1 * * ? *)" # Daily at 1 AM UTC
+
+    lifecycle {
+      delete_after = 30 # Keep backups for 30 days
+    }
+  }
+
+  rule {
+    rule_name         = "weekly_backup"
+    target_vault_name = aws_backup_vault.gojo_backup_vault.name
+    schedule          = "cron(0 2 ? * SUN *)" # Weekly on Sunday at 2 AM UTC
+
+    lifecycle {
+      delete_after = 90 # Keep weekly backups for 90 days
+    }
+  }
+
+  advanced_backup_setting {
+    backup_options = {
+      WindowsVSS = "enabled"
+    }
+    resource_type = "EC2"
+  }
+
+  tags = {
+    Name    = "GojoBackupPlan"
+    Project = "Gojo"
+  }
+}
+
+# AWS Backup selection
+resource "aws_backup_selection" "gojo_backup_selection" {
+  name         = "gojo-backup-selection"
+  iam_role_arn = data.aws_iam_role.lab_role.arn
+  plan_id      = aws_backup_plan.gojo_backup_plan.id
+
+  selection_tag {
+    type  = "STRINGEQUALS"
+    key   = "Project"
+    value = "Gojo"
+  }
+}
+
+# Enable cross-region backup
+resource "aws_backup_region_settings" "gojo_backup_region_settings" {
+  resource_type_opt_in_preference = {
+    "EBS" = true
+    "EC2" = true
+    "RDS" = true
+  }
+}
