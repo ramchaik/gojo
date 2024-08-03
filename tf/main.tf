@@ -5,8 +5,57 @@ provider "aws" {
 # VPC and Networking
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
   tags = {
     Name = "GojoVPC"
+  }
+}
+
+# VPC endpoints 
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id             = aws_vpc.main.id
+  service_name       = "com.amazonaws.us-east-1.ecr.api"
+  vpc_endpoint_type  = "Interface"
+  private_dns_enabled = true
+  subnet_ids         = [aws_subnet.private[0].id, aws_subnet.private[1].id]
+  security_group_ids = [aws_security_group.vpc_endpoint_sg.id]
+}
+
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id             = aws_vpc.main.id
+  service_name       = "com.amazonaws.us-east-1.ecr.dkr"
+  vpc_endpoint_type  = "Interface"
+  private_dns_enabled = true
+  subnet_ids         = [aws_subnet.private[2].id, aws_subnet.private[3].id] 
+  security_group_ids = [aws_security_group.vpc_endpoint_sg.id]
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.us-east-1.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+}
+
+resource "aws_security_group" "vpc_endpoint_sg" {
+  name        = "vpc-endpoint-sg"
+  description = "Security group for VPC endpoints"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.main.cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -273,6 +322,36 @@ resource "aws_lb_listener" "app_listener" {
   }
 }
 
+# ECR Repositories
+resource "aws_ecr_repository" "web_repo" {
+  name                 = "gojo-web-repo"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name    = "GojoWebRepo"
+    Tier    = "Web"
+    Project = "Gojo"
+  }
+}
+
+resource "aws_ecr_repository" "app_repo" {
+  name                 = "gojo-app-repo"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name    = "GojoAppRepo"
+    Tier    = "App"
+    Project = "Gojo"
+  }
+}
 
 # ECS Clusters
 resource "aws_ecs_cluster" "web_cluster" {
@@ -304,7 +383,7 @@ resource "aws_ecs_task_definition" "web_task" {
   container_definitions = jsonencode([
     {
       name  = "web"
-      image = "vsramchaik/gojo-web:latest"
+      image = "${aws_ecr_repository.web_repo.repository_url}:latest"
       portMappings = [
         {
           containerPort = 3000
@@ -354,7 +433,7 @@ resource "aws_ecs_task_definition" "app_task" {
   container_definitions = jsonencode([
     {
       name  = "api"
-      image = "vsramchaik/gojo-api:latest"
+      image = "${aws_ecr_repository.app_repo.repository_url}:latest"
       portMappings = [
         {
           containerPort = 9000
@@ -388,6 +467,8 @@ resource "aws_ecs_task_definition" "app_task" {
     Tier    = "App"
     Project = "Gojo"
   }
+
+  depends_on = [ aws_db_proxy.gojo_db_proxy ]
 }
 
 # ECS Services
@@ -597,6 +678,8 @@ resource "aws_db_proxy" "gojo_db_proxy" {
   role_arn               = data.aws_iam_role.lab_role.arn
   vpc_security_group_ids = [aws_security_group.db_proxy_sg.id]
   vpc_subnet_ids         = [aws_subnet.private[2].id, aws_subnet.private[3].id]
+
+  depends_on = [ aws_db_instance.gojo_db, aws_db_instance.gojo_db_replica ]
 
   auth {
     auth_scheme = "SECRETS"
@@ -824,6 +907,13 @@ resource "aws_cloudwatch_metric_alarm" "db_cpu_alarm_low" {
 # Create an SNS topic for DB alarms
 resource "aws_sns_topic" "db_alarms" {
   name = "gojo-db-alarms"
+}
+
+# SNS topic subscription for email notifications
+resource "aws_sns_topic_subscription" "db_alarms_email" {
+  topic_arn = aws_sns_topic.db_alarms.arn
+  protocol  = "email"
+  endpoint  = var.alarm_email_address
 }
 
 # WAF Web ACL
